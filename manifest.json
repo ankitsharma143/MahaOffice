@@ -1,0 +1,19 @@
+{
+  "name": "MahaOffice \u2014 by MahaIndustries",
+  "short_name": "MahaOffice",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#1d4ed8",
+  "description": "Complete Offline Productivity Suite (Excel, Word, PowerPoint, PDF 4x4, 42-Photo A4 Passport Maker) by MahaIndustries: Pro Ankit Sharma",
+  "icons": [
+    {
+      "src": "./maha-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
