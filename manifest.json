@@ -10,7 +10,7 @@
   "description": "Complete Offline Productivity Suite (Excel, Word, PowerPoint, PDF 4x4, 42-Photo A4 Passport Maker) by MahaIndustries: Pro Ankit Sharma",
   "icons": [
     {
-      "src": "./maha-logo.png",
+      "src": "./maha-icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
