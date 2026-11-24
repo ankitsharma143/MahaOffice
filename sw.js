@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mahaoffice-pwa-v2.3';
+const CACHE_NAME = 'mahaoffice-pwa-v2.4';
 const ASSETS = [
   './',
   './index.html',
@@ -18,6 +18,16 @@ self.addEventListener('activate', (e) => {
   self.clients.claim();
 });
 
+// Network-First: Always fetch latest update when online; serve cached copy when offline!
 self.addEventListener('fetch', (e) => {
-  e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
+  if (e.request.method !== 'GET') return;
+  e.respondWith(
+    fetch(e.request)
+      .then((netRes) => {
+        const copy = netRes.clone();
+        caches.open(CACHE_NAME).then((c) => c.put(e.request, copy)).catch(() => {});
+        return netRes;
+      })
+      .catch(() => caches.match(e.request))
+  );
 });
