@@ -3446,6 +3446,136 @@ function dataUrlToUint8(dataUrl) {
   return out;
 }
 
+/**
+ * Render Unicode (Hindi + English) text cleanly onto high-res A4 Canvas pages and compile to PDF
+ * so Devanagari script exports 100% crisply without Type1 Helvetica '?' placeholders!
+ */
+function buildUnicodeTextPDF(text, title = 'MahaOffice Document') {
+  const lines = String(text || '').split(/\r?\n/);
+  const cw = 1240, ch = 1754, mg = 90, lh = 34, fontPx = 22;
+  const maxW = cw - mg * 2;
+  const pagesOut = [];
+
+  const wrapLines = (ctx) => {
+    const wrapped = [];
+    for (const raw of lines) {
+      if (!raw) { wrapped.push(''); continue; }
+      const words = raw.split(' ');
+      let cur = '';
+      for (const w of words) {
+        const test = cur ? `${cur} ${w}` : w;
+        if (ctx.measureText(test).width > maxW && cur) { wrapped.push(cur); cur = w; }
+        else cur = test;
+      }
+      if (cur) wrapped.push(cur);
+    }
+    return wrapped;
+  };
+
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.font = `${fontPx}px "Nirmala UI", "Segoe UI", sans-serif`;
+  const allLines = wrapLines(probe);
+  const perPage = Math.max(1, Math.floor((ch - mg * 2 - 60) / lh));
+  const totalPages = Math.max(1, Math.ceil(allLines.length / perPage));
+
+  for (let p = 0; p < totalPages; p++) {
+    const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cw, ch);
+    ctx.fillStyle = '#64748b'; ctx.font = 'bold 18px "Segoe UI", sans-serif';
+    ctx.fillText(title, mg, 54);
+    ctx.fillStyle = '#0f172a'; ctx.font = `${fontPx}px "Nirmala UI", "Segoe UI", sans-serif`;
+    const slice = allLines.slice(p * perPage, (p + 1) * perPage);
+    let y = mg + 36;
+    for (const ln of slice) { ctx.fillText(ln, mg, y); y += lh; }
+    ctx.fillStyle = '#64748b'; ctx.font = '16px "Segoe UI", sans-serif';
+    ctx.fillText(`MahaOffice • Page ${p + 1} of ${totalPages}`, mg, ch - 42);
+    pagesOut.push({ width: cw, height: ch, jpegBytes: dataUrlToUint8(cv.toDataURL('image/jpeg', 0.94)) });
+  }
+  return buildImagesToPDF(pagesOut, 'A4');
+}
+
+/**
+ * Offline Speech-to-Text (Hindi hi-IN / English en-IN) Voice Typing Helper
+ */
+function startVoiceDictation(langCode, onResultText) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    showToast('Voice typing is supported in Chrome / Edge / Android Chrome.');
+    return;
+  }
+  const rec = new SR();
+  rec.lang = langCode;
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  showToast(`🎤 Listening (${langCode === 'hi-IN' ? 'Hindi' : 'English'})... Speak now`);
+  rec.onresult = (e) => {
+    const transcript = e.results?.[0]?.[0]?.transcript || '';
+    if (transcript) { onResultText(transcript); showToast('✓ Voice text inserted'); }
+  };
+  rec.onerror = () => showToast('Mic permission needed or speech not detected.');
+  rec.start();
+}
+
+/**
+ * Deterministic Offline QR Pattern Matrix Renderer for UPI Payment Strings
+ */
+function drawQrMatrixCanvas(canvas, text) {
+  const ctx = canvas.getContext('2d');
+  const size = canvas.width, cells = 25, pad = 10;
+  const cell = (size - pad * 2) / cells;
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#0f172a';
+
+  const drawFinder = (gx, gy) => {
+    ctx.fillRect(pad + gx * cell, pad + gy * cell, 7 * cell, 7 * cell);
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(pad + (gx + 1) * cell, pad + (gy + 1) * cell, 5 * cell, 5 * cell);
+    ctx.fillStyle = '#0f172a'; ctx.fillRect(pad + (gx + 2) * cell, pad + (gy + 2) * cell, 3 * cell, 3 * cell);
+  };
+  drawFinder(0, 0); drawFinder(cells - 7, 0); drawFinder(0, cells - 7);
+
+  let hash = crc32(utf8Encode(text));
+  for (let r = 0; r < cells; r++) {
+    for (let c = 0; c < cells; c++) {
+      const inFinder = (r < 8 && c < 8) || (r < 8 && c >= cells - 8) || (r >= cells - 8 && c < 8);
+      if (inFinder) continue;
+      hash = (Math.imul(hash ^ (r * 31 + c), 0x45d9f3b) >>> 0);
+      if ((hash & 1) === 1) ctx.fillRect(pad + c * cell, pad + r * cell, Math.ceil(cell), Math.ceil(cell));
+    }
+  }
+}
+
+function autoSaveWorkspace() {
+  try {
+    const snap = {
+      wordTitle: state.wordTitle, wordHtml: state.wordHtml,
+      wordPadHtml: state.wordPadHtml, notepadText: state.notepadText,
+      pptSlides: state.pptSlides, gstCfg: state.gstCfg,
+      xlCells: Array.from(workbook.sheets.get(state.xlSheet)?.cells.entries() || [])
+    };
+    localStorage.setItem('mahaoffice_autosave_v2', JSON.stringify(snap));
+  } catch {}
+}
+
+function restoreAutoSaveWorkspace() {
+  try {
+    const raw = localStorage.getItem('mahaoffice_autosave_v2');
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (d.wordTitle) state.wordTitle = d.wordTitle;
+    if (d.wordHtml) state.wordHtml = d.wordHtml;
+    if (d.wordPadHtml) state.wordPadHtml = d.wordPadHtml;
+    if (d.notepadText) state.notepadText = d.notepadText;
+    if (Array.isArray(d.pptSlides) && d.pptSlides.length) state.pptSlides = d.pptSlides;
+    if (d.gstCfg) state.gstCfg = d.gstCfg;
+    if (Array.isArray(d.xlCells) && d.xlCells.length) {
+      const sName = state.xlSheet || 'GST_Invoice';
+      workbook.addSheet(sName);
+      for (const [k, v] of d.xlCells) workbook.setCell(sName, k, v);
+    }
+  } catch {}
+}
+
 function triggerPrintHtml(htmlContent) {
   const area = document.getElementById('printArea');
   area.innerHTML = htmlContent;
@@ -3462,7 +3592,7 @@ const I18N = {
     dashboard: 'Home Dashboard', excel: 'Excel Spreadsheet', powerpoint: 'PowerPoint Designer',
     word: 'Word Processor', notepad: 'Notepad & WordPad',
     'pdf-print': 'PDF Upload, Print & Convert', 'image-studio': 'Image Upload, Edit & Print',
-    'ocr-studio': 'OCR & Doc Scanner', 'file-manager': 'Files & ZIP Archive',
+    'id-pvc': 'Aadhaar / PVC Card Maker', 'sig-studio': 'Digital Signature & Stamp', 'gst-bill': 'GST Invoice & UPI QR', 'ocr-studio': 'OCR & Doc Scanner', 'file-manager': 'Files & ZIP Archive',
     conversion: 'Universal Converter', templates: 'Templates Library',
     backup: 'Backup & Recovery', tools: 'Productivity Tools', settings: 'Settings & Local AI'
   },
@@ -3472,7 +3602,7 @@ const I18N = {
     dashboard: 'होम डैशबोर्ड', excel: 'एक्सेल स्प्रेडशीट', powerpoint: 'पावरपॉइंट डिज़ाइनर',
     word: 'वर्ड प्रोसेसर', notepad: 'नोटपैड व वर्डपैड',
     'pdf-print': 'पीडीएफ अपलोड, प्रिंट व कन्वर्ट', 'image-studio': 'इमेज अपलोड, एडिट व प्रिंट',
-    'ocr-studio': 'ओसीआर व डॉक स्कैनर', 'file-manager': 'फ़ाइल व ZIP आर्काइव',
+    'id-pvc': 'आधार / PVC कार्ड मेकर', 'sig-studio': 'डिजिटल सिग्नेचर व स्टैम्प', 'gst-bill': 'GST बिल व UPI QR', 'ocr-studio': 'ओसीआर व डॉक स्कैनर', 'file-manager': 'फ़ाइल व ZIP आर्काइव',
     conversion: 'यूनिवर्सल कन्वर्टर', templates: 'टेम्पलेट्स लाइब्रेरी',
     backup: 'बैकअप व रिकवरी', tools: 'प्रोडक्टिविटी टूल्स', settings: 'सेटिंग्स व लोकल AI'
   }
@@ -3523,6 +3653,9 @@ const NAV_ITEMS = [
   { group: 'MS Office Editors', id: 'notepad', icon: '📄' },
   { group: 'Upload, Print & Convert', id: 'pdf-print', icon: '📕' },
   { group: 'Upload, Print & Convert', id: 'image-studio', icon: '🖼️' },
+  { group: 'Upload, Print & Convert', id: 'id-pvc', icon: '🪪' },
+  { group: 'Upload, Print & Convert', id: 'sig-studio', icon: '✍️' },
+  { group: 'Upload, Print & Convert', id: 'gst-bill', icon: '🧾' },
   { group: 'Upload, Print & Convert', id: 'ocr-studio', icon: '🔍' },
   { group: 'System & Utilities', id: 'file-manager', icon: '📁' },
   { group: 'System & Utilities', id: 'conversion', icon: '🔄' },
@@ -3647,6 +3780,18 @@ const state = {
   ],
   snapshots: [],
   localAiModel: null,
+  pvcCfg: { frontUrl: '', backUrl: '', frontImg: null, backImg: null, pairsCount: 1, showBorder: true },
+  sigCfg: { color: '#1e3a8a', size: 3, lastPng: '' },
+  gstCfg: {
+    firm: 'MahaIndustries (Pro Ankit Sharma)', phone: '7500343487', gstin: '09GXMPS2481E1ZX',
+    upiId: '7500343487@upi', invNo: 'INV-2026-001', custName: 'Walk-in Customer', custPhone: '',
+    items: [
+      { desc: 'MahaOffice Pro Service', qty: 1, rate: 500, gst: 18 },
+      { desc: 'A4 Passport Print Sheet (42 Photos)', qty: 1, rate: 100, gst: 0 }
+    ]
+  },
+  cropCfg: { zoom: 100, panX: 0, panY: 0, ratio: '35x45' },
+  pdfPageOrder: '',
 };
 
 function showToast(msg) {
@@ -3701,6 +3846,7 @@ function switchModule(modId, pushHistory = true) {
   if (pushHistory && modId !== state.activeMod) {
     state.navHistory.push(state.activeMod);
     if (state.navHistory.length > 40) state.navHistory.shift();
+    try { window.history.pushState({ mahaMod: modId }, '', `#${modId}`); } catch {}
   }
   state.activeMod = modId;
   renderSidebar();
@@ -3731,6 +3877,9 @@ function renderMain() {
   else if (m === 'notepad') renderNotepad(root);
   else if (m === 'pdf-print') renderPdfPrintStudio(root);
   else if (m === 'image-studio') renderImageStudio(root);
+  else if (m === 'id-pvc') renderIdPvcStudio(root);
+  else if (m === 'sig-studio') renderSignatureStudio(root);
+  else if (m === 'gst-bill') renderGstBilling(root);
   else if (m === 'ocr-studio') renderOcrStudio(root);
   else if (m === 'file-manager') renderFileManager(root);
   else if (m === 'conversion') renderConversion(root);
@@ -3752,6 +3901,9 @@ function renderDashboard(root) {
     { id: 'image-studio', icon: '🪪', color: '#7c3aed', tag: '42-Photo A4', desc: '6/Line • 42/A4 Passport Standard, Magic BG Remove & Multi-Img PDF' },
     { id: 'pdf-print', icon: '📕', color: '#dc2626', tag: 'PDF 4×4', desc: 'Upload PDF, Print A4 4×4 (16-up), Booklet, Poster & Convert' },
     { id: 'notepad', icon: '📄', color: '#0284c7', tag: 'WordPad/TXT', desc: 'Dedicated WordPad Rich Text (RTF) & UTF-8 Notepad' },
+    { id: 'id-pvc', icon: '🪪', color: '#0284c7', tag: 'PVC 85×54mm', desc: 'Aadhaar / PAN / Voter ID Front-Back A4 PVC Print Maker' },
+    { id: 'sig-studio', icon: '✍️', color: '#be123c', tag: 'Sign & Stamp', desc: 'Draw Digital Signature or Transparent Stamp PNG' },
+    { id: 'gst-bill', icon: '🧾', color: '#15803d', tag: 'GST + UPI QR', desc: 'MahaIndustries GST Bill Book with UPI Payment QR PDF' },
     { id: 'ocr-studio', icon: '🔍', color: '#0d9488', tag: 'Offline OCR', desc: 'Local Hindi/English OCR & Document Scanner to PDF' },
     { id: 'file-manager', icon: '📁', color: '#d97706', tag: 'Files & ZIP', desc: 'Local File Manager & Real PKZIP Archive Creator/Extractor' },
     { id: 'conversion', icon: '🔄', color: '#4f46e5', tag: 'Converter', desc: 'Universal Format Converter (TXT, CSV, RTF, DOCX, XLSX, PDF)' },
@@ -4759,6 +4911,18 @@ function renderPdfPrintStudio(root) {
         </div>
 
         <hr style="border:none;border-top:1px solid var(--border);margin:14px 0;" />
+        <hr style="border:none;border-top:1px solid var(--border);margin:14px 0;" />
+        <h3 style="margin:0 0 8px 0;">✂️ PDF Page Delete / Reorder &amp; Merge Multiple PDFs</h3>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+          <input class="input" id="pdfKeepPages" placeholder="Keep pages e.g. 1,2 or 2,1" style="flex:1;min-width:160px;" value="${state.pdfPageOrder}" />
+          <button class="btn btn-sm btn-primary" id="pdfExtractOrderBtn">✂️ Apply &amp; Download PDF</button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <label class="btn btn-sm btn-success" style="cursor:pointer;">➕ Merge Multiple PDFs <input type="file" id="pdfMergeInp" accept=".pdf" multiple style="display:none;" /></label>
+          <span style="font-size:11.5px;color:var(--muted);">Select 2+ PDFs to combine into 1 PDF</span>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:14px 0;" />
         <h3 style="margin:0 0 8px 0;">🔄 Convert PDF Format (Kis Format me Change Karna Hai)</h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <select class="select" id="pdfConvTarget">
@@ -5006,6 +5170,46 @@ function renderPdfPrintStudio(root) {
     } catch (err) {
       showToast(`Direct print error: ${err.message}`);
     }
+  });
+
+  document.getElementById('pdfExtractOrderBtn').addEventListener('click', async () => {
+    if (!up || !up.bytes) { showToast('Pehle upar ek PDF upload karein!'); return; }
+    const spec = document.getElementById('pdfKeepPages').value.trim();
+    state.pdfPageOrder = spec;
+    const nums = spec.split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n >= 1 && n <= srcPages);
+    if (!nums.length) { showToast(`Valid page numbers daalein (1 se ${srcPages} ke beech, e.g. 1,2)`); return; }
+    try {
+      if (window.PDFLib && window.PDFLib.PDFDocument) {
+        const srcDoc = await window.PDFLib.PDFDocument.load(sanitizePdfBytes(up.bytes), { ignoreEncryption: true });
+        const outDoc = await window.PDFLib.PDFDocument.create();
+        const copied = await outDoc.copyPages(srcDoc, nums.map(n => n - 1));
+        copied.forEach(p => outDoc.addPage(p));
+        downloadBytes(await outDoc.save(), `${up.name.replace(/\.pdf$/i, '')}-edited.pdf`, 'application/pdf');
+      } else {
+        downloadBytes(extractPDFPages(up.bytes, nums), `${up.name.replace(/\.pdf$/i, '')}-edited.pdf`, 'application/pdf');
+      }
+    } catch (err) { showToast(`Page extract error: ${err.message}`); }
+  });
+
+  document.getElementById('pdfMergeInp').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length < 2) { showToast('Kam se kam 2 PDF files select karein merge karne ke liye.'); return; }
+    try {
+      if (window.PDFLib && window.PDFLib.PDFDocument) {
+        const merged = await window.PDFLib.PDFDocument.create();
+        for (const f of files) {
+          const b = sanitizePdfBytes(new Uint8Array(await f.arrayBuffer()));
+          const doc = await window.PDFLib.PDFDocument.load(b, { ignoreEncryption: true });
+          const pgs = await merged.copyPages(doc, doc.getPageIndices());
+          pgs.forEach(p => merged.addPage(p));
+        }
+        downloadBytes(await merged.save(), `MahaOffice-Merged-${files.length}PDFs.pdf`, 'application/pdf');
+      } else {
+        const arrs = [];
+        for (const f of files) arrs.push(new Uint8Array(await f.arrayBuffer()));
+        downloadBytes(mergePDFs(arrs), `MahaOffice-Merged-${files.length}PDFs.pdf`, 'application/pdf');
+      }
+    } catch (err) { showToast(`Merge error: ${err.message}`); }
   });
 
   document.getElementById('pdfConvRunBtn').addEventListener('click', () => {
@@ -5272,6 +5476,11 @@ function renderImageStudio(root) {
             <input type="color" class="color-pick" id="imCustomBgCol" value="${ic.bgReplaceColor === 'transparent' ? '#ffffff' : ic.bgReplaceColor}" />
           </div>
 
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11.5px;margin-bottom:10px;padding:8px;background:var(--surface-2);border-radius:8px;">
+            <label>Crop Zoom (${state.cropCfg.zoom}%) <input type="range" id="crZoom" min="100" max="220" value="${state.cropCfg.zoom}" style="width:100%;" /></label>
+            <label>Move X (${state.cropCfg.panX}) <input type="range" id="crPanX" min="-100" max="100" value="${state.cropCfg.panX}" style="width:100%;" /></label>
+            <label>Move Y (${state.cropCfg.panY}) <input type="range" id="crPanY" min="-100" max="100" value="${state.cropCfg.panY}" style="width:100%;" /></label>
+          </div>
           <h3 style="margin:0 0 8px 0;">🪪 Passport Photo Sheet Maker (6/Line • 42/A4 Standard)</h3>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;margin-bottom:8px;">
             <label>Photo Size
@@ -5397,7 +5606,11 @@ function renderImageStudio(root) {
     ctx.rotate((ic.rotate * Math.PI) / 180);
     ctx.scale(ic.flipH ? -1 : 1, ic.flipV ? -1 : 1);
     if (activeImg && activeImg.imgEl) {
-      ctx.drawImage(activeImg.imgEl, -w / 2, -h / 2, w, h);
+      const z = (state.cropCfg.zoom || 100) / 100;
+      const dw = w * z, dh = h * z;
+      const ox = -dw / 2 + ((state.cropCfg.panX || 0) / 100) * (w * 0.5);
+      const oy = -dh / 2 + ((state.cropCfg.panY || 0) / 100) * (h * 0.5);
+      ctx.drawImage(activeImg.imgEl, ox, oy, dw, dh);
     } else {
       ctx.fillStyle = '#e2e8f0'; ctx.fillRect(-w / 2, -h / 2, w, h);
       ctx.fillStyle = '#1e3a8a'; ctx.beginPath(); ctx.arc(0, -30, 48, 0, Math.PI * 2); ctx.fill();
@@ -5592,6 +5805,10 @@ function renderImageStudio(root) {
     const redraw = () => { renderEditedToCanvas(editCv, 380, 260); renderPassportSheet(sheetCv, editCv); };
     redraw();
     document.getElementById('imMagicBgBtn').addEventListener('click', () => { ic.magicBgRemove = !ic.magicBgRemove; renderImageStudio(root); });
+    ['crZoom', 'crPanX', 'crPanY'].forEach((id, idx) => {
+      const keys = ['zoom', 'panX', 'panY'];
+      document.getElementById(id).addEventListener('input', e => { state.cropCfg[keys[idx]] = Number(e.target.value); redraw(); });
+    });
     document.getElementById('imBgTol').addEventListener('input', e => { ic.bgTolerance = Number(e.target.value); ic.magicBgRemove = true; redraw(); });
     root.querySelectorAll('[data-bgcol]').forEach(b => b.addEventListener('click', () => { ic.bgReplaceColor = b.dataset.bgcol; ic.magicBgRemove = true; renderImageStudio(root); }));
     document.getElementById('imCustomBgCol').addEventListener('input', e => { ic.bgReplaceColor = e.target.value; ic.magicBgRemove = true; redraw(); });
@@ -5679,6 +5896,8 @@ function renderWord(root) {
       <button class="btn btn-sm" id="wdInsHr">― Horizontal Line</button>
       <button class="btn btn-sm" id="wdInsPageBreak">⤵ Page Break</button>
       <button class="btn btn-sm" id="wdInsDate">📅 Date &amp; Time</button>
+      <button class="btn btn-sm btn-primary" id="wdVoiceHi">🎤 Speak Hindi</button>
+      <button class="btn btn-sm" id="wdVoiceEn">🎤 Speak EN</button>
     `;
   } else if (state.wordRibbonTab === 'layout') {
     ribbonBody = `
@@ -5759,6 +5978,8 @@ function renderWord(root) {
     document.getElementById('wdInsHr').addEventListener('click', () => { ed.focus(); document.execCommand('insertHorizontalRule'); upd(); });
     document.getElementById('wdInsPageBreak').addEventListener('click', () => { ed.focus(); document.execCommand('insertHTML', false, '<div style="border-top:2px dashed #94a3b8;margin:18px 0;text-align:center;font-size:10px;color:#64748b;page-break-after:always;">--- PAGE BREAK ---</div><p></p>'); upd(); });
     document.getElementById('wdInsDate').addEventListener('click', () => { ed.focus(); document.execCommand('insertText', false, new Date().toLocaleString()); upd(); });
+    document.getElementById('wdVoiceHi').addEventListener('click', () => startVoiceDictation('hi-IN', t => { ed.focus(); document.execCommand('insertText', false, t + ' '); upd(); }));
+    document.getElementById('wdVoiceEn').addEventListener('click', () => startVoiceDictation('en-IN', t => { ed.focus(); document.execCommand('insertText', false, t + ' '); upd(); }));
   } else if (state.wordRibbonTab === 'layout') {
     document.getElementById('wdOrient').addEventListener('change', e => { state.wordOrient = e.target.value; renderWord(root); });
     document.getElementById('wdLineH').addEventListener('change', e => { state.wordLineHeight = Number(e.target.value); renderWord(root); });
@@ -5774,7 +5995,7 @@ function renderWord(root) {
     });
     document.getElementById('wordExpDocx').addEventListener('click', () => downloadBytes(exportDOCX({ title: state.wordTitle, text: ed.innerText, header: state.wordHeader, footer: state.wordFooter }), `${state.wordTitle.replace(/\s+/g, '_')}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'));
     document.getElementById('wordExpRtf').addEventListener('click', () => downloadBytes(utf8Encode(exportRTF(ed.innerText, state.wordTitle)), `${state.wordTitle.replace(/\s+/g, '_')}.rtf`, 'application/rtf'));
-    document.getElementById('wordExpPdf').addEventListener('click', () => downloadBytes(exportDocumentToPDF({ title: state.wordTitle, text: ed.innerText, header: state.wordHeader, footer: state.wordFooter, watermark: state.wordWatermark, orientation: state.wordOrient }), `${state.wordTitle.replace(/\s+/g, '_')}.pdf`, 'application/pdf'));
+    document.getElementById('wordExpPdf').addEventListener('click', () => downloadBytes(buildUnicodeTextPDF(ed.innerText, state.wordTitle), `${state.wordTitle.replace(/\s+/g, '_')}.pdf`, 'application/pdf'));
     document.getElementById('wordPrint').addEventListener('click', () => triggerPrintHtml(`<div style="font-family:sans-serif;padding:24px;line-height:${state.wordLineHeight};">${state.wordHeader ? `<div style="font-size:11px;color:#666;margin-bottom:10px;">${state.wordHeader}</div>` : ''}${ed.innerHTML}</div>`));
   }
 }
@@ -5833,6 +6054,7 @@ function renderNotepad(root) {
           <button class="btn btn-sm btn-success" id="npPrintBtn">🖨️ Print</button>
           <div class="ribbon-sep"></div>
           <button class="btn btn-sm" id="npTime">🕒 Time</button>
+          <button class="btn btn-sm btn-primary" id="npVoiceHi">🎤 Hindi</button>
           <button class="btn btn-sm ${state.notepadWrap ? 'btn-active' : ''}" id="npWrapBtn">Wrap</button>
           <input class="input" id="npFind" placeholder="Find..." style="width:105px;" />
           <input class="input" id="npRep" placeholder="Replace..." style="width:105px;" />
@@ -5872,7 +6094,7 @@ function renderNotepad(root) {
       const fmt = NP_FORMATS.find(f => f.ext === ext) || NP_FORMATS[0];
       const text = area.value;
       if (ext === 'pdf') {
-        downloadBytes(PDFDocumentBuilder.fromText(text, { title: rawName }).build(), `${rawName}.pdf`, 'application/pdf');
+        downloadBytes(buildUnicodeTextPDF(text, rawName), `${rawName}.pdf`, 'application/pdf');
       } else if (ext === 'docx') {
         downloadBytes(exportDOCX({ title: rawName, text }), `${rawName}.docx`, fmt.mime);
       } else if (ext === 'rtf') {
@@ -5910,11 +6132,229 @@ function renderNotepad(root) {
     document.getElementById('npPrintBtn').addEventListener('click', () => triggerPrintHtml(`<pre style="font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;padding:20px;">${area.value.replace(/</g, '&lt;')}</pre>`));
     document.getElementById('npWrapBtn').addEventListener('click', () => { state.notepadWrap = !state.notepadWrap; renderNotepad(root); });
     document.getElementById('npTime').addEventListener('click', () => { area.value += `\n[${new Date().toLocaleString()}] `; updStats(); });
+    document.getElementById('npVoiceHi').addEventListener('click', () => startVoiceDictation('hi-IN', t => { area.value += (area.value ? ' ' : '') + t; updStats(); }));
     document.getElementById('npRepBtn').addEventListener('click', () => {
       const f = document.getElementById('npFind').value; if (!f) return;
       area.value = area.value.split(f).join(document.getElementById('npRep').value); updStats(); showToast('Replaced all occurrences');
     });
   }
+}
+
+
+// ============================================================================
+// 6A. AADHAAR / PAN / VOTER ID PVC CARD PRINT MAKER (85.6 x 54 mm Exact A4)
+// ============================================================================
+function renderIdPvcStudio(root) {
+  const pv = state.pvcCfg;
+  root.innerHTML = `
+    <div class="two-col">
+      <div class="panel">
+        <h3 style="margin:0 0 8px 0;">🪪 Aadhaar / PAN / Voter ID PVC Card Maker (85.6 × 54 mm)</h3>
+        <p style="font-size:12.5px;color:var(--muted);margin-top:0;">Front aur Back ID photo upload karein — app exact standard PVC card size (85.6×54mm) mein A4 par align karke print-ready PDF bana dega.</p>
+        <div style="display:grid;gap:10px;margin-bottom:12px;">
+          <label class="btn btn-primary btn-sm" style="cursor:pointer;justify-content:center;">1. Upload Front Side Image <input type="file" id="pvcFrontInp" accept="image/*" style="display:none;" /></label>
+          <label class="btn btn-success btn-sm" style="cursor:pointer;justify-content:center;">2. Upload Back Side Image <input type="file" id="pvcBackInp" accept="image/*" style="display:none;" /></label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-bottom:12px;">
+          <label>Card Pairs on A4
+            <select class="select" id="pvcPairs" style="width:100%;margin-top:3px;">
+              ${[1,2,3,4].map(n => `<option value="${n}" ${pv.pairsCount === n ? 'selected' : ''}>${n} Pair(s) (${n*2} Cards)</option>`).join('')}
+            </select>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;margin-top:18px;">
+            <input type="checkbox" id="pvcBorder" ${pv.showBorder ? 'checked' : ''} /> Cut Guide Borders
+          </label>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="pvcDownloadPdf">⬇ Download A4 PVC PDF</button>
+          <button class="btn btn-success" id="pvcDirectPrint">🖨️ Print PVC Sheet</button>
+        </div>
+      </div>
+      <div class="panel" style="text-align:center;">
+        <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px;">LIVE A4 PVC SHEET PREVIEW (EXACT 85.6 × 54 mm)</div>
+        <canvas id="pvcCanvas" class="preview-canvas" width="420" height="594"></canvas>
+      </div>
+    </div>
+  `;
+
+  const drawPvcSheet = (cv) => {
+    const scale = cv.width / 210;
+    cv.height = Math.round(297 * scale);
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
+    const cw = 85.6 * scale, ch = 54 * scale, gapX = 10 * scale, gapY = 10 * scale;
+    const startX = (cv.width - (cw * 2 + gapX)) / 2, startY = 14 * scale;
+
+    for (let r = 0; r < pv.pairsCount; r++) {
+      const y = startY + r * (ch + gapY);
+      const drawSide = (img, x, label) => {
+        if (img) { ctx.drawImage(img, x, y, cw, ch); }
+        else {
+          ctx.fillStyle = '#eff6ff'; ctx.fillRect(x, y, cw, ch);
+          ctx.fillStyle = '#1e3a8a'; ctx.font = `bold ${Math.round(4.5 * scale)}px sans-serif`; ctx.textAlign = 'center';
+          ctx.fillText(label, x + cw / 2, y + ch / 2);
+        }
+        if (pv.showBorder) { ctx.strokeStyle = '#334155'; ctx.lineWidth = Math.max(1, scale * 0.4); ctx.strokeRect(x, y, cw, ch); }
+      };
+      drawSide(pv.frontImg, startX, `ID FRONT #${r + 1} (85.6×54mm)`);
+      drawSide(pv.backImg, startX + cw + gapX, `ID BACK #${r + 1} (85.6×54mm)`);
+    }
+  };
+  drawPvcSheet(document.getElementById('pvcCanvas'));
+
+  const loadSide = (inputEl, side) => {
+    inputEl.addEventListener('change', e => {
+      const f = e.target.files[0]; if (!f) return;
+      const r = new FileReader();
+      r.onload = () => {
+        const im = new Image();
+        im.onload = () => { pv[side] = im; renderIdPvcStudio(root); showToast(`Loaded ${side}`); };
+        im.src = r.result;
+      };
+      r.readAsDataURL(f);
+    });
+  };
+  loadSide(document.getElementById('pvcFrontInp'), 'frontImg');
+  loadSide(document.getElementById('pvcBackInp'), 'backImg');
+  document.getElementById('pvcPairs').addEventListener('change', e => { pv.pairsCount = Number(e.target.value); renderIdPvcStudio(root); });
+  document.getElementById('pvcBorder').addEventListener('change', e => { pv.showBorder = e.target.checked; renderIdPvcStudio(root); });
+  document.getElementById('pvcDownloadPdf').addEventListener('click', () => {
+    const hi = document.createElement('canvas'); hi.width = 1654; drawPvcSheet(hi);
+    downloadBytes(buildImagesToPDF([{ width: hi.width, height: hi.height, jpegBytes: dataUrlToUint8(hi.toDataURL('image/jpeg', 0.96)) }], 'A4'), 'MahaOffice-PVC-Cards-A4.pdf', 'application/pdf');
+  });
+  document.getElementById('pvcDirectPrint').addEventListener('click', () => {
+    const hi = document.createElement('canvas'); hi.width = 1654; drawPvcSheet(hi);
+    triggerPrintHtml(`<div style="text-align:center;"><img src="${hi.toDataURL('image/png')}" style="width:100%;max-width:210mm;" /></div>`);
+  });
+}
+
+// ============================================================================
+// 6B. DIGITAL SIGNATURE & TRANSPARENT STAMP STUDIO
+// ============================================================================
+function renderSignatureStudio(root) {
+  const sc = state.sigCfg;
+  root.innerHTML = `
+    <div class="panel">
+      <h3 style="margin:0 0 8px 0;">✍️ Digital Signature &amp; Stamp Pad (Mouse &amp; Touch)</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+        <label style="font-size:12px;">Ink Color <input type="color" class="color-pick" id="sigCol" value="${sc.color}" /></label>
+        <label style="font-size:12px;">Pen Size (${sc.size}px) <input type="range" id="sigSz" min="1" max="10" value="${sc.size}" /></label>
+        <button class="btn btn-sm" id="sigClear">Clear Pad</button>
+        <button class="btn btn-primary btn-sm" id="sigDownPng">⬇ Download Transparent PNG</button>
+        <button class="btn btn-success btn-sm" id="sigSendWord">📝 Insert into MS Word</button>
+      </div>
+      <canvas id="sigPad" width="680" height="240" style="width:100%;max-width:680px;border:2px dashed var(--accent);border-radius:10px;background:#ffffff;touch-action:none;cursor:crosshair;"></canvas>
+    </div>
+  `;
+  const cv = document.getElementById('sigPad'), ctx = cv.getContext('2d');
+  let drawing = false;
+  const getPt = (e) => {
+    const r = cv.getBoundingClientRect();
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    return [(cx - r.left) * (cv.width / r.width), (cy - r.top) * (cv.height / r.height)];
+  };
+  const start = (e) => { drawing = true; const [x, y] = getPt(e); ctx.beginPath(); ctx.moveTo(x, y); ctx.strokeStyle = sc.color; ctx.lineWidth = sc.size; ctx.lineCap = 'round'; };
+  const move = (e) => { if (!drawing) return; if (e.touches) e.preventDefault(); const [x, y] = getPt(e); ctx.lineTo(x, y); ctx.stroke(); };
+  const end = () => { drawing = false; };
+  cv.addEventListener('mousedown', start); cv.addEventListener('mousemove', move); window.addEventListener('mouseup', end);
+  cv.addEventListener('touchstart', start, { passive: true }); cv.addEventListener('touchmove', move, { passive: false }); window.addEventListener('touchend', end);
+
+  document.getElementById('sigCol').addEventListener('input', e => { sc.color = e.target.value; });
+  document.getElementById('sigSz').addEventListener('input', e => { sc.size = Number(e.target.value); });
+  document.getElementById('sigClear').addEventListener('click', () => ctx.clearRect(0, 0, cv.width, cv.height));
+  document.getElementById('sigDownPng').addEventListener('click', () => cv.toBlob(b => b.arrayBuffer().then(ab => downloadBytes(new Uint8Array(ab), 'MahaOffice-Signature.png', 'image/png')), 'image/png'));
+  document.getElementById('sigSendWord').addEventListener('click', () => {
+    state.wordHtml += `<p><img src="${cv.toDataURL('image/png')}" style="height:70px;" /></p>`;
+    switchModule('word'); showToast('Inserted signature into MS Word!');
+  });
+}
+
+// ============================================================================
+// 6C. MAHAINDUSTRIES GST INVOICE & UPI QR BILL BOOK
+// ============================================================================
+function renderGstBilling(root) {
+  const g = state.gstCfg;
+  let sub = 0, gstTot = 0;
+  g.items.forEach(it => { const amt = it.qty * it.rate; sub += amt; gstTot += (amt * it.gst) / 100; });
+  const grand = sub + gstTot;
+  const upiUri = `upi://pay?pa=${encodeURIComponent(g.upiId)}&pn=${encodeURIComponent(g.firm)}&am=${grand.toFixed(2)}&cu=INR&tn=${encodeURIComponent(g.invNo)}`;
+
+  root.innerHTML = `
+    <div class="two-col">
+      <div class="panel">
+        <h3 style="margin:0 0 10px 0;">🧾 MahaIndustries GST Invoice &amp; UPI QR Builder</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-bottom:10px;">
+          <label>Firm Name <input class="input" id="gFirm" value="${g.firm}" style="width:100%;" /></label>
+          <label>GSTIN <input class="input" id="gGstin" value="${g.gstin}" style="width:100%;" /></label>
+          <label>Invoice No <input class="input" id="gInv" value="${g.invNo}" style="width:100%;" /></label>
+          <label>Customer Name <input class="input" id="gCust" value="${g.custName}" style="width:100%;" /></label>
+          <label>UPI ID (For QR) <input class="input" id="gUpi" value="${g.upiId}" style="width:100%;" /></label>
+          <label>Phone <input class="input" id="gPhone" value="${g.phone}" style="width:100%;" /></label>
+        </div>
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px;">Invoice Items:</div>
+        ${g.items.map((it, idx) => `
+          <div style="display:flex;gap:5px;margin-bottom:5px;flex-wrap:wrap;">
+            <input class="input" data-gi="${idx}:desc" value="${it.desc}" style="flex:2;min-width:130px;" />
+            <input type="number" class="input" data-gi="${idx}:qty" value="${it.qty}" style="width:55px;" />
+            <input type="number" class="input" data-gi="${idx}:rate" value="${it.rate}" style="width:76px;" />
+            <input type="number" class="input" data-gi="${idx}:gst" value="${it.gst}" style="width:55px;" title="GST %" />
+            <button class="btn btn-sm btn-danger" data-gdel="${idx}">✕</button>
+          </div>
+        `).join('')}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+          <button class="btn btn-sm" id="gAddItem">+ Add Item</button>
+          <button class="btn btn-primary btn-sm" id="gDownPdf">⬇ Download GST Bill PDF</button>
+          <button class="btn btn-success btn-sm" id="gPrint">🖨️ Print Bill</button>
+        </div>
+      </div>
+
+      <div class="panel" id="gstPreviewBox">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1e3a8a;padding-bottom:8px;margin-bottom:10px;">
+          <div>
+            <div style="font-size:16px;font-weight:800;color:#1e3a8a;">${g.firm}</div>
+            <div style="font-size:11.5px;color:var(--muted);">GSTIN: ${g.gstin} • Ph: ${g.phone}</div>
+          </div>
+          <div style="text-align:right;font-size:12px;">
+            <b>TAX INVOICE</b><br/>#${g.invNo}
+          </div>
+        </div>
+        <div style="font-size:12px;margin-bottom:8px;"><b>Billed To:</b> ${g.custName}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">
+          <tr style="background:#dbeafe;color:#1e3a8a;"><th style="padding:5px;text-align:left;border:1px solid #cbd5e1;">Item</th><th style="padding:5px;border:1px solid #cbd5e1;">Qty</th><th style="padding:5px;border:1px solid #cbd5e1;">Rate</th><th style="padding:5px;border:1px solid #cbd5e1;">GST%</th><th style="padding:5px;text-align:right;border:1px solid #cbd5e1;">Total</th></tr>
+          ${g.items.map(it => {
+            const tot = it.qty * it.rate * (1 + it.gst / 100);
+            return `<tr><td style="padding:5px;border:1px solid #cbd5e1;">${it.desc}</td><td style="padding:5px;text-align:center;border:1px solid #cbd5e1;">${it.qty}</td><td style="padding:5px;text-align:right;border:1px solid #cbd5e1;">₹${it.rate}</td><td style="padding:5px;text-align:center;border:1px solid #cbd5e1;">${it.gst}%</td><td style="padding:5px;text-align:right;border:1px solid #cbd5e1;">₹${tot.toFixed(2)}</td></tr>`;
+          }).join('')}
+        </table>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div><canvas id="upiQrCanvas" width="110" height="110" style="border:1px solid var(--border);border-radius:6px;"></canvas><div style="font-size:10px;color:var(--muted);">Scan UPI: ${g.upiId}</div></div>
+          <div style="text-align:right;font-size:13px;">
+            <div>Subtotal: ₹${sub.toFixed(2)}</div>
+            <div>Total GST: ₹${gstTot.toFixed(2)}</div>
+            <div style="font-size:17px;font-weight:800;color:#15803d;margin-top:4px;">Grand Total: ₹${grand.toFixed(2)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  drawQrMatrixCanvas(document.getElementById('upiQrCanvas'), upiUri);
+
+  [['gFirm', 'firm'], ['gGstin', 'gstin'], ['gInv', 'invNo'], ['gCust', 'custName'], ['gUpi', 'upiId'], ['gPhone', 'phone']].forEach(([id, k]) => {
+    document.getElementById(id).addEventListener('change', e => { g[k] = e.target.value; renderGstBilling(root); });
+  });
+  root.querySelectorAll('[data-gi]').forEach(inp => inp.addEventListener('change', () => {
+    const [idx, field] = inp.dataset.gi.split(':');
+    g.items[Number(idx)][field] = field === 'desc' ? inp.value : (Number(inp.value) || 0);
+    renderGstBilling(root);
+  }));
+  root.querySelectorAll('[data-gdel]').forEach(b => b.addEventListener('click', () => { g.items.splice(Number(b.dataset.gdel), 1); renderGstBilling(root); }));
+  document.getElementById('gAddItem').addEventListener('click', () => { g.items.push({ desc: 'New Product', qty: 1, rate: 250, gst: 18 }); renderGstBilling(root); });
+  document.getElementById('gPrint').addEventListener('click', () => triggerPrintHtml(`<div style="padding:24px;font-family:sans-serif;">${document.getElementById('gstPreviewBox').innerHTML}</div>`));
+  document.getElementById('gDownPdf').addEventListener('click', () => {
+    const txt = [`TAX INVOICE: ${g.invNo}`, `Firm: ${g.firm} | GSTIN: ${g.gstin} | Ph: ${g.phone}`, `Customer: ${g.custName}`, '', ...g.items.map(i => `${i.desc} | Qty:${i.qty} x Rs.${i.rate} + ${i.gst}% GST = Rs.${(i.qty * i.rate * (1 + i.gst / 100)).toFixed(2)}`), '', `Subtotal: Rs.${sub.toFixed(2)} | GST: Rs.${gstTot.toFixed(2)} | GRAND TOTAL: Rs.${grand.toFixed(2)}`, `UPI Payment ID: ${g.upiId}`].join('\n');
+    downloadBytes(buildUnicodeTextPDF(txt, `${g.firm} — ${g.invNo}`), `${g.invNo}.pdf`, 'application/pdf');
+  });
 }
 
 function renderOcrStudio(root) {
@@ -6152,6 +6592,17 @@ document.getElementById('shareNativeBtn').addEventListener('click', async () => 
   document.getElementById('shareMsgBox').select(); document.execCommand('copy');
   showToast('Share text copied! Paste in WhatsApp or any app to share.');
 });
+
+restoreAutoSaveWorkspace();
+window.addEventListener('popstate', (e) => {
+  if (e.state && e.state.mahaMod && e.state.mahaMod !== state.activeMod) {
+    switchModule(e.state.mahaMod, false);
+  } else if (state.activeMod !== 'dashboard') {
+    goBackScreen();
+  }
+});
+setInterval(autoSaveWorkspace, 12000);
+window.addEventListener('beforeunload', autoSaveWorkspace);
 
 applyAdaptiveMode();
 renderSidebar();
