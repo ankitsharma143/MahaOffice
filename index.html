@@ -3620,8 +3620,12 @@ const state = {
   wordPageSize: 'A4', wordOrient: 'portrait', wordMargin: 52, wordLineHeight: 1.5,
   wordBgColor: '#ffffff', wordBorder: false, wordWatermark: '', wordHeader: 'MAHA OFFICE STUDIO — Official Document', wordFooter: 'Confidential • Generated Offline',
   wordPadHtml: '<h3>WordPad Rich Note</h3><p>Fast lightweight rich-text editor with <b>bold</b>, <i>italic</i>, <u>underline</u>, colors, lists, images &amp; RTF/DOCX export.</p>',
-  notepadTab: 'wordpad',
-  notepadText: 'MAHA OFFICE STUDIO — Notepad (UTF-8)\nLine 2: Offline plain text & Hindi notes.\nLine 3: नमस्ते!',
+  notepadTab: 'notepad',
+  notepadFilename: 'maha-note',
+  notepadSaveExt: 'txt',
+  notepadWrap: true,
+  notepadFontSize: 13,
+  notepadText: 'MahaOffice — Advanced Multi-Format Notepad (UTF-8)\nLine 2: Save directly as .txt, .html, .js, .css, .json, .md, .py, .csv, .xml, .sql, .rtf, .docx, or .pdf!\nLine 3: हिन्दी यूनिकोड समर्थन सक्रिय है।',
   xlCondRule: null, xlUndoStack: [],
 
   // PDF Upload, Print & Convert state
@@ -5776,11 +5780,29 @@ function renderWord(root) {
 }
 
 function renderNotepad(root) {
+  const NP_FORMATS = [
+    { ext: 'txt', label: 'Plain Text (.txt)', mime: 'text/plain;charset=utf-8' },
+    { ext: 'html', label: 'HTML Webpage (.html)', mime: 'text/html;charset=utf-8' },
+    { ext: 'js', label: 'JavaScript (.js)', mime: 'application/javascript;charset=utf-8' },
+    { ext: 'css', label: 'CSS Stylesheet (.css)', mime: 'text/css;charset=utf-8' },
+    { ext: 'json', label: 'JSON Data (.json)', mime: 'application/json;charset=utf-8' },
+    { ext: 'md', label: 'Markdown (.md)', mime: 'text/markdown;charset=utf-8' },
+    { ext: 'xml', label: 'XML File (.xml)', mime: 'application/xml;charset=utf-8' },
+    { ext: 'csv', label: 'CSV Table (.csv)', mime: 'text/csv;charset=utf-8' },
+    { ext: 'py', label: 'Python Script (.py)', mime: 'text/x-python;charset=utf-8' },
+    { ext: 'sql', label: 'SQL Query (.sql)', mime: 'application/sql;charset=utf-8' },
+    { ext: 'bat', label: 'Batch Script (.bat)', mime: 'text/plain;charset=utf-8' },
+    { ext: 'sh', label: 'Shell Script (.sh)', mime: 'text/x-shellscript;charset=utf-8' },
+    { ext: 'rtf', label: 'Rich Text (.rtf)', mime: 'application/rtf' },
+    { ext: 'docx', label: 'Word Document (.docx)', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+    { ext: 'pdf', label: 'PDF Document (.pdf)', mime: 'application/pdf' },
+  ];
+
   root.innerHTML = `
     <div class="office-ribbon-wrap">
       <div class="ribbon-tabs">
+        <button class="ribbon-tab ${state.notepadTab === 'notepad' ? 'active' : ''}" data-nptab="notepad">Notepad (All Formats: TXT, HTML, JS, PDF...)</button>
         <button class="ribbon-tab ${state.notepadTab === 'wordpad' ? 'active' : ''}" data-nptab="wordpad">WordPad (Rich Text RTF)</button>
-        <button class="ribbon-tab ${state.notepadTab === 'notepad' ? 'active' : ''}" data-nptab="notepad">Notepad (Plain UTF-8 TXT)</button>
       </div>
       <div class="ribbon-body">
         ${state.notepadTab === 'wordpad' ? `
@@ -5797,20 +5819,35 @@ function renderNotepad(root) {
           <button class="btn btn-sm" id="wpExpPdf">⬇ .PDF</button>
           <button class="btn btn-sm btn-success" id="wpPrint">🖨️ Print</button>
         ` : `
-          <button class="btn btn-sm btn-primary" id="npSaveTxt">⬇ .TXT</button>
-          <button class="btn btn-sm" id="npExpPdf">⬇ .PDF</button>
-          <button class="btn btn-sm" id="npTime">🕒 Date/Time</button>
-          <input class="input" id="npFind" placeholder="Find..." style="width:120px;" />
-          <input class="input" id="npRep" placeholder="Replace..." style="width:120px;" />
-          <button class="btn btn-sm" id="npRepBtn">Replace All</button>
+          <label class="btn btn-sm" style="cursor:pointer;">📂 Open File <input type="file" id="npOpenFile" accept=".txt,.html,.htm,.js,.css,.json,.md,.xml,.csv,.py,.sql,.bat,.sh,.log,.ini,.ts,.jsx,.tsx" style="display:none;" /></label>
+          <input class="input" id="npFilename" value="${state.notepadFilename.replace(/"/g, '&quot;')}" placeholder="File name..." style="width:135px;font-weight:600;" />
+          <select class="select" id="npSaveExt" style="width:165px;">
+            ${NP_FORMATS.map(f => `<option value="${f.ext}" ${state.notepadSaveExt === f.ext ? 'selected' : ''}>${f.label}</option>`).join('')}
+          </select>
+          <button class="btn btn-sm btn-primary" id="npSaveAsBtn">💾 Save As .${state.notepadSaveExt.toUpperCase()}</button>
+          <div class="ribbon-sep"></div>
+          <button class="btn btn-sm" id="npQuickHtml">⬇ .HTML</button>
+          <button class="btn btn-sm" id="npQuickJs">⬇ .JS</button>
+          <button class="btn btn-sm" id="npQuickTxt">⬇ .TXT</button>
+          <button class="btn btn-sm" id="npQuickPdf">⬇ .PDF</button>
+          <button class="btn btn-sm btn-success" id="npPrintBtn">🖨️ Print</button>
+          <div class="ribbon-sep"></div>
+          <button class="btn btn-sm" id="npTime">🕒 Time</button>
+          <button class="btn btn-sm ${state.notepadWrap ? 'btn-active' : ''}" id="npWrapBtn">Wrap</button>
+          <input class="input" id="npFind" placeholder="Find..." style="width:105px;" />
+          <input class="input" id="npRep" placeholder="Replace..." style="width:105px;" />
+          <button class="btn btn-sm" id="npRepBtn">Replace</button>
         `}
       </div>
     </div>
     ${state.notepadTab === 'wordpad'
-      ? `<div class="panel"><div id="wpEditor" contenteditable="true" style="min-height:380px;outline:none;line-height:1.6;font-size:14.5px;">${state.wordPadHtml}</div></div>`
-      : `<textarea class="code-area" id="npArea" style="min-height:380px;">${state.notepadText}</textarea>`}
+      ? `<div class="panel"><div id="wpEditor" contenteditable="true" style="min-height:400px;outline:none;line-height:1.6;font-size:14.5px;">${state.wordPadHtml}</div></div>`
+      : `<textarea class="code-area" id="npArea" spellcheck="false" style="min-height:420px;font-size:${state.notepadFontSize}px;white-space:${state.notepadWrap ? 'pre-wrap' : 'pre'};overflow-x:auto;">${state.notepadText}</textarea>
+         <div id="npStatsBar" style="margin-top:6px;font-size:12px;color:var(--muted);"></div>`}
   `;
+
   root.querySelectorAll('[data-nptab]').forEach(b => b.addEventListener('click', () => { state.notepadTab = b.dataset.nptab; renderNotepad(root); }));
+
   if (state.notepadTab === 'wordpad') {
     const wp = document.getElementById('wpEditor');
     wp.addEventListener('input', () => { state.wordPadHtml = wp.innerHTML; });
@@ -5822,11 +5859,61 @@ function renderNotepad(root) {
     document.getElementById('wpPrint').addEventListener('click', () => triggerPrintHtml(`<div style="font-family:sans-serif;padding:24px;">${wp.innerHTML}</div>`));
   } else {
     const area = document.getElementById('npArea');
-    area.addEventListener('input', () => { state.notepadText = area.value; });
-    document.getElementById('npTime').addEventListener('click', () => { area.value += `\n[${new Date().toLocaleString()}] `; state.notepadText = area.value; });
-    document.getElementById('npRepBtn').addEventListener('click', () => { const f = document.getElementById('npFind').value; if (!f) return; area.value = area.value.split(f).join(document.getElementById('npRep').value); state.notepadText = area.value; showToast('Replaced'); });
-    document.getElementById('npSaveTxt').addEventListener('click', () => downloadBytes(utf8Encode(area.value), 'notepad.txt', 'text/plain'));
-    document.getElementById('npExpPdf').addEventListener('click', () => downloadBytes(PDFDocumentBuilder.fromText(area.value, { title: 'Notepad' }).build(), 'notepad.pdf', 'application/pdf'));
+    const updStats = () => {
+      state.notepadText = area.value;
+      const st = countTextStats(area.value);
+      document.getElementById('npStatsBar').textContent = `Lines: ${st.lines} • Words: ${st.words} • Characters: ${st.chars} • UTF-8 Ready (HTML, JS, CSS, JSON, PY, TXT, DOCX, RTF, PDF)`;
+    };
+    updStats();
+    area.addEventListener('input', updStats);
+
+    const saveInFormat = (ext) => {
+      const rawName = (state.notepadFilename || 'maha-note').trim().replace(/\.[^.]+$/, '') || 'maha-note';
+      const fmt = NP_FORMATS.find(f => f.ext === ext) || NP_FORMATS[0];
+      const text = area.value;
+      if (ext === 'pdf') {
+        downloadBytes(PDFDocumentBuilder.fromText(text, { title: rawName }).build(), `${rawName}.pdf`, 'application/pdf');
+      } else if (ext === 'docx') {
+        downloadBytes(exportDOCX({ title: rawName, text }), `${rawName}.docx`, fmt.mime);
+      } else if (ext === 'rtf') {
+        downloadBytes(utf8Encode(exportRTF(text, rawName)), `${rawName}.rtf`, fmt.mime);
+      } else {
+        downloadBytes(utf8Encode(text), `${rawName}.${ext}`, fmt.mime);
+      }
+    };
+
+    document.getElementById('npOpenFile').addEventListener('change', async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      area.value = await f.text();
+      const dot = f.name.lastIndexOf('.');
+      if (dot > 0) {
+        state.notepadFilename = f.name.slice(0, dot);
+        const ext = f.name.slice(dot + 1).toLowerCase();
+        if (NP_FORMATS.some(x => x.ext === ext)) state.notepadSaveExt = ext;
+      } else {
+        state.notepadFilename = f.name;
+      }
+      state.notepadText = area.value;
+      renderNotepad(root);
+      showToast(`Opened ${f.name}`);
+    });
+    document.getElementById('npFilename').addEventListener('input', e => { state.notepadFilename = e.target.value; });
+    document.getElementById('npSaveExt').addEventListener('change', e => {
+      state.notepadSaveExt = e.target.value;
+      document.getElementById('npSaveAsBtn').textContent = `💾 Save As .${state.notepadSaveExt.toUpperCase()}`;
+    });
+    document.getElementById('npSaveAsBtn').addEventListener('click', () => saveInFormat(state.notepadSaveExt));
+    document.getElementById('npQuickHtml').addEventListener('click', () => saveInFormat('html'));
+    document.getElementById('npQuickJs').addEventListener('click', () => saveInFormat('js'));
+    document.getElementById('npQuickTxt').addEventListener('click', () => saveInFormat('txt'));
+    document.getElementById('npQuickPdf').addEventListener('click', () => saveInFormat('pdf'));
+    document.getElementById('npPrintBtn').addEventListener('click', () => triggerPrintHtml(`<pre style="font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;padding:20px;">${area.value.replace(/</g, '&lt;')}</pre>`));
+    document.getElementById('npWrapBtn').addEventListener('click', () => { state.notepadWrap = !state.notepadWrap; renderNotepad(root); });
+    document.getElementById('npTime').addEventListener('click', () => { area.value += `\n[${new Date().toLocaleString()}] `; updStats(); });
+    document.getElementById('npRepBtn').addEventListener('click', () => {
+      const f = document.getElementById('npFind').value; if (!f) return;
+      area.value = area.value.split(f).join(document.getElementById('npRep').value); updStats(); showToast('Replaced all occurrences');
+    });
   }
 }
 
